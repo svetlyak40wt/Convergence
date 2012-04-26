@@ -59,7 +59,7 @@ from opster import command
 
 gVersion                  = "0.4"
 
-class ServerContextFactory:
+class SSLContextFactory:
 
     def __init__(self, cert, key):
         self.cert         = cert
@@ -157,7 +157,7 @@ def initializeKey(keyFile):
 
 @command()
 def main(
-        logfile=('l', '/var/log/convergence.log', 'filename to log to'),
+        log_file=('l', '/var/log/convergence.log', 'filename to log to'),
         debug=('d', False, 'verbose output'),
         http_port=('p', 80, 'http port'),
         proxy_port=('', 4242, 'proxy port'),
@@ -171,6 +171,7 @@ def main(
         backend=('b', '', 'verifier backend (optional)'),
         db_path=('', '/var/lib/convergence/convergence.db', 'database path'),
         pid_file=('', '/var/run/convergence.pid', 'pid file'),
+        no_https=('', False, 'turn off ssl on listened ports (useful to put Twisted behind Nginx)'),
     ):
 
 
@@ -184,18 +185,25 @@ def main(
 
     privateKey                    = initializeKey(key)
     database                      = initializeDatabase(db_path)
-    sslFactory                    = initializeFactory(database, privateKey, verifier)
-    connectFactory                = http.HTTPFactory(timeout=10)
-    connectFactory.protocol       = ConnectChannel
+    notaryFactory                    = initializeFactory(database, privateKey, verifier)
+    proxyConnectFactory                = http.HTTPFactory(timeout=10)
+    proxyConnectFactory.protocol       = ConnectChannel
 
-    reactor.listenSSL(ssl_port, sslFactory, ServerContextFactory(cert, key),
-                      interface=interface)
-    reactor.listenSSL(proxy_port, sslFactory, ServerContextFactory(cert, key),
-                      interface=interface)
-    reactor.listenTCP(port=http_port, factory=connectFactory,
+    if no_https:
+        reactor.listenTCP(ssl_port, notaryFactory,
+                          interface=interface)
+        reactor.listenTCP(proxy_port, notaryFactory,
+                          interface=interface)
+    else:
+        reactor.listenSSL(ssl_port, notaryFactory, SSLContextFactory(cert, key),
+                          interface=interface)
+        reactor.listenSSL(proxy_port, notaryFactory, SSLContextFactory(cert, key),
+                          interface=interface)
+
+    reactor.listenTCP(port=http_port, factory=proxyConnectFactory,
                       interface=interface)
 
-    initializeLogging(logfile, loglevel)
+    initializeLogging(log_file, loglevel)
     checkPrivileges(uname, gname)
 
     if foreground:
