@@ -3,3 +3,5 @@
 *.pem
 *.cer
 *.key
+*.log
+*.db

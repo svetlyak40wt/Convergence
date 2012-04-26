@@ -44,16 +44,19 @@ USA
 
 from sqlite3 import *
 import sys, os.path, os
+from opster import command
 
-def main(argv):
+@command()
+def main(db_path=None):
+    if db_path is None:
+        db_path   = '/var/lib/convergence/convergence.db'
 
-    convergencePath = "/var/lib/convergence/"
-    convergencedb   = convergencePath + "convergence.db"
+    db_dir = os.path.dirname(db_path)
 
-    if not os.path.exists(convergencePath):
-        os.makedirs(convergencePath)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir)
         
-    connection = connect(convergencedb)
+    connection = connect(db_path)
     cursor     = connection.cursor()
 
     cursor.execute("CREATE TABLE fingerprints (id integer primary key, location TEXT, fingerprint TEXT, timestamp_start INTEGER, timestamp_finish INTEGER)")
@@ -62,4 +65,5 @@ def main(argv):
 
 
 if __name__ == '__main__':
-    main(sys.argv[1:])
+    main.command()
+

@@ -56,9 +56,9 @@ from twisted.web.resource import Resource
 from twisted.internet import reactor
 
 import sys, string, os, getopt, logging, pwd, grp, convergence.daemonize
+from opster import command
 
 gVersion                  = "0.4"
-CONVERGENCE_DATABASE_PATH = '/var/lib/convergence/convergence.db'
 
 class ServerContextFactory:
 
@@ -73,53 +73,6 @@ class ServerContextFactory:
         ctx.set_options(SSL.OP_NO_SSLv2)
 
         return ctx
-
-def parseOptions(argv):
-    logLevel          = logging.INFO
-    httpPort          = 80
-    sslPort           = 443
-    incomingInterface = ''
-    certFile          = "/etc/ssl/certs/convergence.pem"
-    keyFile           = "/etc/ssl/private/convergence.key"
-    uname             = "nobody"
-    gname             = "nogroup"
-    verifier          = NetworkPerspectiveVerifier();
-    background        = True
-
-    try:
-        opts, args = getopt.getopt(argv, "s:p:i:o:c:k:u:g:b:fdh")
-
-        for opt, arg in opts:
-            if opt in("-p"):
-                httpPort = int(arg)
-            elif opt in ("-s"):
-                sslPort = int(arg)
-            elif opt in ("-i"):
-                incomingInterface = arg
-            elif opt in ("-c"):
-                certFile = arg
-            elif opt in ("-k"):
-                keyFile = arg
-            elif opt in ("-u"):
-                uname = arg
-            elif opt in ("-g"):
-                gname = arg
-            elif opt in ("-d"):
-                logLevel = logging.DEBUG
-            elif opt in ("-f"):
-                background = False
-            elif opt in ("-b"):
-                verifier = initializeBackend(arg)
-            elif opt in ("-h"):
-                usage()
-                sys.exit()
-        
-        return (logLevel, sslPort, httpPort, certFile, keyFile,
-                uname, gname, background, incomingInterface, verifier)
-
-    except getopt.GetoptError:
-        usage()
-        sys.exit(2)
 
 def usage():
     print "\nnotary " + str(gVersion) + " by Moxie Marlinspike"
@@ -163,7 +116,10 @@ def writePidFile():
     pidFile.write(str(os.getpid()))
     pidFile.close()
     
-def dropPrivileges(userName, groupName):
+def dropPrivileges(userName, groupName, database_path):
+    if os.environ.get('LOGNAME') != 'root':
+        return
+
     try:
         user = pwd.getpwnam(userName)
     except KeyError:
@@ -175,15 +131,15 @@ def dropPrivileges(userName, groupName):
         print >> sys.stderr, 'Group ' + groupName + ' does not exist, cannot drop privileges'
         sys.exit(2)
 
-    os.chown(os.path.dirname(CONVERGENCE_DATABASE_PATH), user.pw_uid, group.gr_gid)
-    os.chown(CONVERGENCE_DATABASE_PATH, user.pw_uid, group.gr_gid)
+    os.chown(os.path.dirname(database_path), user.pw_uid, group.gr_gid)
+    os.chown(database_path, user.pw_uid, group.gr_gid)
     
     os.setgroups([group.gr_gid])
     os.setgid(group.gr_gid)
     os.setuid(user.pw_uid)
 
-def initializeLogging(logLevel):
-    logging.basicConfig(filename="/var/log/convergence.log",level=logLevel, 
+def initializeLogging(logFilename, logLevel):
+    logging.basicConfig(filename=logFilename,level=logLevel, 
                         format='%(asctime)s %(message)s',filemode='a')        
 
     logging.info("Convergence Notary started...")
@@ -194,43 +150,63 @@ def initializeFactory(database, privateKey, verifier):
 
     return Site(root)    
 
-def initializeDatabase():
-    return adbapi.ConnectionPool("sqlite3", CONVERGENCE_DATABASE_PATH, cp_max=1, cp_min=1)
+def initializeDatabase(database_path):
+    return adbapi.ConnectionPool("sqlite3", database_path, cp_max=1, cp_min=1)
 
 def initializeKey(keyFile):
     return open(keyFile,'r').read() 
 
-def main(argv):
-    (logLevel, sslPort, httpPort,
-     certFile, keyFile, userName,
-     groupName, background,
-     incomingInterface, verifier) = parseOptions(argv)
-    privateKey                    = initializeKey(keyFile)
-    database                      = initializeDatabase()
+@command()
+def main(
+        logfile=('l', '/var/log/convergence.log', 'filename to log to'),
+        debug=('d', False, 'verbose output'),
+        http_port=('p', 80, 'http port'),
+        ssl_port=('s', 443, 'ssl port'),
+        interface=('i', '', 'incoming interface'),
+        cert=('c', '/etc/ssl/certs/convergence.pem', 'path to public certificate key'),
+        key=('k', '/etc/ssl/private/convergence.key', 'path to private key'),
+        uname=('u', 'nobody', 'user name to drop privileges'),
+        gname=('g', 'nogroup', 'user name to drop privileges'),
+        foreground=('f', False, 'run server in foreground'),
+        backend=('b', '', 'verifier backend (optional)'),
+        db_path=('', '/var/lib/convergence/convergence.db', 'database path'),
+    ):
+
+
+    loglevel = logging.INFO
+    if debug:
+        loglevel = logging.DEBUG
+
+    verifier = NetworkPerspectiveVerifier()
+    if backend:
+        verifier = initializeBackend(backend)
+
+    privateKey                    = initializeKey(key)
+    database                      = initializeDatabase(db_path)
     sslFactory                    = initializeFactory(database, privateKey, verifier)
     connectFactory                = http.HTTPFactory(timeout=10)
     connectFactory.protocol       = ConnectChannel
-    
-    reactor.listenSSL(sslPort, sslFactory, ServerContextFactory(certFile, keyFile),
-                      interface=incomingInterface)
-    reactor.listenSSL(4242, sslFactory, ServerContextFactory(certFile, keyFile),
-                      interface=incomingInterface)
-    reactor.listenTCP(port=httpPort, factory=connectFactory,
-                      interface=incomingInterface)
-        
-    initializeLogging(logLevel)
-    checkPrivileges(userName, groupName)
 
-    if background:
+    reactor.listenSSL(ssl_port, sslFactory, ServerContextFactory(cert, key),
+                      interface=interface)
+    reactor.listenSSL(4242, sslFactory, ServerContextFactory(cert, key),
+                      interface=interface)
+    reactor.listenTCP(port=http_port, factory=connectFactory,
+                      interface=interface)
+
+    initializeLogging(logfile, loglevel)
+    checkPrivileges(uname, gname)
+
+    if foreground:
+        print "\nconvergence " + str(gVersion) + " by Moxie Marlinspike running..."
+    else:
         print "\nconvergence " + str(gVersion) + " by Moxie Marlinspike backgrounding..."
         convergence.daemonize.createDaemon()
-    else:
-        print "\nconvergence " + str(gVersion) + " by Moxie Marlinspike running..."
 
     writePidFile()
-    dropPrivileges(userName, groupName)
+    dropPrivileges(uname, gname, db_path)
 
     reactor.run()
 
 if __name__ == '__main__':
-    main(sys.argv[1:])
+    main.command()
