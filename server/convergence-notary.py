@@ -43,7 +43,6 @@ event_reactor.install()
 
 from convergence.TargetPage import TargetPage
 from convergence.ConnectChannel import ConnectChannel
-from convergence.ConnectRequest import ConnectRequest
 
 from convergence.verifier.NetworkPerspectiveVerifier import NetworkPerspectiveVerifier
 from convergence.verifier.GoogleCatalogVerifier import GoogleCatalogVerifier
@@ -111,8 +110,8 @@ def checkPrivileges(userName, groupName):
               'because it does not exist!' % userName
         sys.exit(2)            
 
-def writePidFile():
-    pidFile = open("/var/run/convergence.pid", "wb")
+def writePidFile(pid_file):
+    pidFile = open(pid_file, "wb")
     pidFile.write(str(os.getpid()))
     pidFile.close()
     
@@ -161,6 +160,7 @@ def main(
         logfile=('l', '/var/log/convergence.log', 'filename to log to'),
         debug=('d', False, 'verbose output'),
         http_port=('p', 80, 'http port'),
+        proxy_port=('', 4242, 'proxy port'),
         ssl_port=('s', 443, 'ssl port'),
         interface=('i', '', 'incoming interface'),
         cert=('c', '/etc/ssl/certs/convergence.pem', 'path to public certificate key'),
@@ -170,6 +170,7 @@ def main(
         foreground=('f', False, 'run server in foreground'),
         backend=('b', '', 'verifier backend (optional)'),
         db_path=('', '/var/lib/convergence/convergence.db', 'database path'),
+        pid_file=('', '/var/run/convergence.pid', 'pid file'),
     ):
 
 
@@ -189,7 +190,7 @@ def main(
 
     reactor.listenSSL(ssl_port, sslFactory, ServerContextFactory(cert, key),
                       interface=interface)
-    reactor.listenSSL(4242, sslFactory, ServerContextFactory(cert, key),
+    reactor.listenSSL(proxy_port, sslFactory, ServerContextFactory(cert, key),
                       interface=interface)
     reactor.listenTCP(port=http_port, factory=connectFactory,
                       interface=interface)
@@ -203,7 +204,7 @@ def main(
         print "\nconvergence " + str(gVersion) + " by Moxie Marlinspike backgrounding..."
         convergence.daemonize.createDaemon()
 
-    writePidFile()
+    writePidFile(pid_file)
     dropPrivileges(uname, gname, db_path)
 
     reactor.run()
